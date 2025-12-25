@@ -33,21 +33,45 @@ def round_up_to_tenth(value)
   (value * 10).ceil / 10.0
 end
 
+# Format as 3 digits before decimal, 1 after (e.g., "036.8")
 def format_coordinate(coord)
-  # Format as 3 digits before decimal, 1 after (e.g., "036.8")
-  parts = format('%.1f', coord).split('.')
-  integer_part = parts[0].to_i
-  decimal_part = parts[1]
-  format('%03d.%s', integer_part, decimal_part)
+  format('%04d', (coord * 10.0).round).tap { |s| s[3, 0] = '.' }
 end
 
+# Parse coordinates like "175.3/145.4" or "175.3 / 145.4"
 def parse_coordinates(coord_string)
-  # Parse coordinates like "175.3/145.4" or "175.3 / 145.4"
-  parts = coord_string.split('/').map(&:strip)
-  if parts.length != 2
-    raise ArgumentError, "Invalid coordinate format: #{coord_string}"
+  if %r{^(?<x>\d{3}\.\d) ?/ ?(?<y>\d{3}\.\d)$} =~ coord_string
+    return [x, y].map(&:to_f)
   end
-  [parts[0].to_f, parts[1].to_f]
+  raise ArgumentError, "Invalid coordinate format: #{coord_string}"
+end
+
+def total_fuel_cost(start_x:, start_y:, end_x:, end_y:, extra_cost:)
+  travel_distance = distance(start_x, start_y, end_x, end_y)
+  travel_fuel = round_up_to_tenth(travel_distance / 10.0)
+  extra_cost + travel_fuel
+end
+
+def answer(
+  portal_name:, portal_destination_x:, portal_destination_y:,
+  hyperspace_travel_distance:, target_x:, target_y:
+)
+  portal_cost = portal_name ? PORTAL_COST : 0.0
+  hyperspace_fuel = round_up_to_tenth(hyperspace_travel_distance / 10.0)
+  total_fuel = portal_cost + hyperspace_fuel
+
+  directly_or_not_to = portal_name ? 'to' : 'directly through hyperspace to'
+  hyperspace_travel_part = "Travel #{format('%.1f', hyperspace_travel_distance)} #{directly_or_not_to} #{format_coordinate(target_x)} / #{format_coordinate(target_y)} (cost: #{format('%.1f', hyperspace_fuel)} units of fuel)"
+  total_fuel_cost_part = "Total fuel cost: #{format('%.1f', total_fuel)} units of fuel"
+
+  answer = ''
+  if portal_name
+    answer << <<~QUASISPACE_PART
+      Use quasi-space portal at #{portal_name} (cost: #{format('%.1f', portal_cost)} units of fuel to use portal spawner)
+      Emerge in hyperspace at #{format_coordinate(portal_destination_x)} / #{format_coordinate(portal_destination_y)}
+    QUASISPACE_PART
+  end
+  answer << hyperspace_travel_part << "\n" << total_fuel_cost_part << "\n"
 end
 
 # Parse command-line arguments
@@ -59,38 +83,40 @@ end
 start_x, start_y = parse_coordinates(ARGV[1])
 target_x, target_y = parse_coordinates(ARGV[3])
 
-# Calculate direct travel cost
-direct_distance = distance(start_x, start_y, target_x, target_y)
-direct_fuel = round_up_to_tenth(direct_distance / 10.0)
+# Create augmented hash with costs
+starting_points_with_costs = PORTALS.dup
+starting_points_with_costs.transform_values! { |coords| coords + [PORTAL_COST] }
+starting_points_with_costs[nil] = [start_x, start_y, 0.0]
 
-# Find the portal with the closest destination to the target
-closest_portal = nil
-closest_distance = Float::INFINITY
+# Find the cheapest option
+best_option = nil
+best_cost = Float::INFINITY
 
-PORTALS.each do |name, (dest_x, dest_y)|
-  dist = distance(dest_x, dest_y, target_x, target_y)
-  if dist < closest_distance
-    closest_distance = dist
-    closest_portal = { name: name, dest_x: dest_x, dest_y: dest_y }
+starting_points_with_costs.each do |portal_name, (dest_x, dest_y, extra_cost)|
+  cost = total_fuel_cost(
+    start_x: dest_x,
+    start_y: dest_y,
+    end_x: target_x,
+    end_y: target_y,
+    extra_cost: extra_cost
+  )
+
+  if cost < best_cost
+    best_cost = cost
+    best_option = {
+      portal_name: portal_name,
+      portal_destination_x: dest_x,
+      portal_destination_y: dest_y,
+      hyperspace_travel_distance: distance(dest_x, dest_y, target_x, target_y)
+    }
   end
 end
 
-# Calculate portal travel fuel costs
-portal_travel_fuel = round_up_to_tenth(closest_distance / 10.0)
-hyperspace_fuel = PORTAL_COST + portal_travel_fuel
-
-# Choose the cheaper option
-if direct_fuel <= hyperspace_fuel
-  # Direct travel is cheaper or equal
-  hyperspace_fuel = direct_fuel
-  portal_cost = 0.0
-  puts "Travel #{format('%.1f', direct_distance)} directly through hyperspace to #{format_coordinate(target_x)} / #{format_coordinate(target_y)} (cost: #{format('%.1f', direct_fuel)} units of fuel)"
-else
-  # Portal travel is cheaper
-  portal_cost = PORTAL_COST
-  puts "Use quasi-space portal at #{closest_portal[:name]} (cost: #{format('%.1f', portal_cost)} units of fuel to use portal spawner)"
-  puts "Emerge in hyperspace at #{format_coordinate(closest_portal[:dest_x])} / #{format_coordinate(closest_portal[:dest_y])}"
-  puts "Travel #{format('%.1f', closest_distance)} to #{format_coordinate(target_x)} / #{format_coordinate(target_y)} (cost: #{format('%.1f', portal_travel_fuel)} units of fuel)"
-end
-puts "Total fuel cost: #{format('%.1f', hyperspace_fuel)} units of fuel"
-
+puts answer(
+  portal_name: best_option[:portal_name],
+  portal_destination_x: best_option[:portal_destination_x],
+  portal_destination_y: best_option[:portal_destination_y],
+  hyperspace_travel_distance: best_option[:hyperspace_travel_distance],
+  target_x: target_x,
+  target_y: target_y
+)
